@@ -1,0 +1,6 @@
+build/
+dist/
+.buildozer/
+bin/
+__pycache__/
+*.spec.bak

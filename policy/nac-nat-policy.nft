@@ -1,0 +1,50 @@
+#!/usr/sbin/nft -f
+# NAT masquerading and no-port-forwarding policy.
+#
+#  * Kernel forwarding stays on (Docker and libvirt need it). The FORWARD policy is
+#    DROP, so nothing is forwarded unless a rule below allows it. No DNAT rules exist,
+#    so nothing is port-forwarded from the outside into the host or containers.
+#  * Masquerade (source NAT) for outbound traffic from the Docker and libvirt subnets.
+#  * Loopback traffic never goes through FORWARD, so local services need no exception.
+#  * Own tables (inet nac_policy, ip nac_nat); other firewall rules are not touched.
+#
+# Edit the subnets in the nac_nat table to match your bridges, then run install_root.sh again.
+
+table inet nac_policy {
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+
+    ct state invalid drop
+    ct state established,related accept
+
+    # Outbound only.
+    iifname "docker0" oifname "eth0" accept
+    iifname "br-*"    oifname "eth0" accept
+    iifname "virbr0"  oifname "eth0" accept
+
+    # Between local bridges.
+    iifname "docker0" oifname "docker0" accept
+    iifname "br-*"    oifname "br-*" accept
+
+    # No inbound rule from eth0 into a bridge: no port forwarding.
+  }
+
+  chain output {
+    type filter hook output priority 0; policy accept;
+  }
+}
+
+table ip nac_nat {
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+
+    ip saddr 172.17.0.0/16    oifname "eth0" masquerade   # docker0 default subnet
+    ip saddr 172.18.0.0/16    oifname "eth0" masquerade   # a docker user network
+    ip saddr 192.168.122.0/24 oifname "eth0" masquerade   # libvirt default network
+  }
+
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+    # No DNAT rules: no port forwarding.
+  }
+}

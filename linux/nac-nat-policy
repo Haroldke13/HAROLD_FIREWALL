@@ -1,0 +1,45 @@
+#!/bin/bash
+# nac-nat-policy: root helper for the HAROLD_FIREWALL app.
+# Fixed actions only: status, apply, rollback. Installed to /usr/local/sbin by install_root.sh.
+# The policy is read from /usr/local/share/nac-nat/policy.nft (root-owned copy), never from user space.
+set -eu
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+POLICY=/usr/local/share/nac-nat/policy.nft
+EVID=${NAC_NAT_EVIDENCE:-/var/lib/nac-nat/evidence}
+
+case "${1:-}" in
+  status)
+    echo "ip_forward=$(cat /proc/sys/net/ipv4/ip_forward)"
+    if nft list table inet nac_policy >/dev/null 2>&1; then
+      echo "inet nac_policy: LOADED"; nft list table inet nac_policy
+    else
+      echo "inet nac_policy: not loaded"
+    fi
+    if nft list table ip nac_nat >/dev/null 2>&1; then
+      echo "ip nac_nat: LOADED"; nft list table ip nac_nat
+    else
+      echo "ip nac_nat: not loaded"
+    fi
+    ;;
+  apply)
+    [[ -f "$POLICY" ]] || { echo "policy copy missing: $POLICY" >&2; exit 3; }
+    nft -c -f "$POLICY"
+    mkdir -p "$EVID"
+    stamp=$(date +%Y%m%d_%H%M%S)
+    nft list ruleset > "$EVID/ruleset_before_$stamp.nft" 2>/dev/null || true
+    sha256sum "$POLICY" > "$EVID/policy_$stamp.sha256"
+    nft delete table inet nac_policy 2>/dev/null || true
+    nft delete table ip nac_nat 2>/dev/null || true
+    nft -f "$POLICY"
+    echo "applied; policy sha256 $(cut -d' ' -f1 < "$EVID/policy_$stamp.sha256")"
+    ;;
+  rollback)
+    nft delete table inet nac_policy 2>/dev/null || true
+    nft delete table ip nac_nat 2>/dev/null || true
+    echo "rolled back: nac_policy and nac_nat removed"
+    ;;
+  *)
+    echo "usage: nac-nat-policy {status|apply|rollback}" >&2
+    exit 2
+    ;;
+esac
